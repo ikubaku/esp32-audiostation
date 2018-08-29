@@ -1,14 +1,47 @@
-menu "Example Configuration"
+menu "Firmware Configuration"
 
-config BLINK_GPIO
-    int "Blink GPIO number"
+config CS_PIN
+    int "CS pin number"
 	range 0 34
 	default 5
 	help
-		GPIO number (IOxx) to blink on and off.
-
-		Some GPIOs are used for other purposes (flash connections, etc.) and cannot be used to blink.
-
-		GPIOs 35-39 are input-only so cannot be used as outputs.
+		GPIO number (IOxx) to use as the CS signal pin.
+		
+config RES_PIN
+    int "RES pin number"
+    range 0 34
+    default 26
+    help
+        GPIO number (IOxx) to use as the RES signal pin.
+        
+config CD_PIN
+    int "CD pin number"
+    range 0 34
+    default 25
+    help
+        GPIO number (IOxx) to use as the CD signal pin.
+        
+config SPI_FREQ
+    int "SPI bus frequency"
+    range 4000000 24000000
+    default 4000000
+    help
+        SPI bus frequency.
+        
+config FB_WIDTH
+    int "Width of the framebuffer"
+    range 0 160
+    default 160
+    help
+        No description.
+        
+config FB_HEIGHT
+    int "Height of the framebuffer"
+    range 0 132
+    default 128
+    help
+        No description.
 
 endmenu
+
+#GPIOs 35-39 are input-only so cannot be used as outputs.

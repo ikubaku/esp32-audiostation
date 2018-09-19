@@ -3,7 +3,6 @@
 #include "esp_wifi.h"
 #include "esp_wps.h"
 #include "esp_event_loop.h"
-#include "mdns.h"
 #include "nvs_flash.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -14,8 +13,6 @@
 #include "lwip/err.h"
 #include "lwip/udp.h"
 #include "lwip/ip_addr.h"
-#include "lwip/dns.h"
-#include "lwip/pbuf.h"
 #include "lwip/netdb.h"
 
 #define CS_PIN CONFIG_CS_PIN    // fixed by iomux to achieve high speed transmission
@@ -94,12 +91,19 @@ uint32_t dns_stat = DNS_INIT;
 ip_addr_t dns_server_addr;
 
 // SNTP
+#define NTP_INIT 0
+#define NTP_WAIT 1
+#define NTP_OK 2
 bool is_time_synced = false;
+uint32_t ntp_stat = NTP_INIT;
 int r_timestamp;
 
+// Network etc.
+#define NET_RETRY_DELAY_MS 1000
+uint32_t retry_timer = 0;
 
 // Function prototypes
-void dns_callback(const char *, const ip_addr_t *, void *);
+//void dns_callback(const char *, const ip_addr_t *, void *);
 void recv_handler(void *, struct udp_pcb *, struct pbuf *, const ip_addr_t *, u16_t);
 
 // GPIO Impl.
@@ -517,24 +521,16 @@ void loop() {
     err_t lwip_err;
     esp_err_t err;
     // Resolve host name
-    if(net_stat == NET_CONNECTED && dns_stat == DNS_INIT) {
+    if(retry_timer >= NET_RETRY_DELAY_MS && net_stat == NET_CONNECTED && (dns_stat == DNS_INIT || dns_stat == DNS_NXDOMAIN)) {
+        retry_timer = 0;
+        puts("DNS...");
         ip4_addr_t ntp_ip4;
-        err = mdns_init();
-        if(err != ESP_OK) {
-            printf("mdns_init() failed with err = %d.\n", err);
-            dns_stat = DNS_FAIL;
-            mdns_free();
-            return;
-        }
-        //err = mdns_query_a("ikbk.net", 10000, &ntp_ip4);
-        struct hostent * h_ent = gethostbyname("ikbk.net");
+        struct hostent * h_ent = gethostbyname("ntp.nict.jp");
         if(h_errno == HOST_NOT_FOUND) {
             dns_stat = DNS_NXDOMAIN;
-            mdns_free();
         } else if(h_ent == NULL) {
             printf("gethostbyname() failed with h_errno = %d.\n", h_errno);
             dns_stat = DNS_FAIL;
-            mdns_free();
             return;
         } else {
             dns_stat = DNS_OK;
@@ -544,16 +540,18 @@ void loop() {
                 ((uint8_t *)&(ntp_ip4.addr))[3-i] = temp[i];
             }
             ip_addr_copy_from_ip4(ntp_server_ip, ntp_ip4);
-            mdns_free();
         }
     }
     
     // NTP request
-    if(net_stat == NET_CONNECTED && dns_stat == DNS_OK && !is_time_synced) {
+    if(retry_timer >= 30000 && net_stat == NET_CONNECTED && dns_stat == DNS_OK && (ntp_stat != NTP_OK)) {
+        retry_timer = 0;
+        puts("SNTP...");
         lwip_err = udp_connect(udp_if, &ntp_server_ip, 123);
         if(lwip_err != ERR_OK) {
             printf("udp_connect failed with lwip_err = %d.\n", lwip_err);
-            is_time_synced = true;
+            ntp_stat = NTP_INIT;
+            //is_time_synced = true;
             return;
         }
         byte sntp_buf[47];
@@ -575,14 +573,16 @@ void loop() {
         udp_recv(udp_if, recv_handler, NULL);
         ip4_addr_t ntp_v4 = ntp_server_ip.u_addr.ip4;
         printf("Sending to: %d\n", ntp_v4.addr);
+        ntp_stat = NTP_WAIT;
         lwip_err = udp_send(udp_if, sntp_packet);
         pbuf_free(sntp_packet);
         if(lwip_err != ERR_OK) {
             printf("udp_send failed with lwip_err = %d.\n", lwip_err);
-            is_time_synced = true;
+            ntp_stat = NTP_INIT;
+            //is_time_synced = true;
             return;
         }
-        is_time_synced = true;
+        //is_time_synced = true;
     }
     
     clear_framebuffer(framebuf);
@@ -620,6 +620,7 @@ void loop() {
     
     color = 0b11111100;
     commitFramebuffer(framebuf);
+    retry_timer += 100;
     delay_ms(100);
 }
 
@@ -660,6 +661,7 @@ void recv_handler(void * arg, struct udp_pcb * pcb, struct pbuf * p, const ip_ad
             }
         } while((p = p->next) != NULL);
         r_timestamp = (recv_buf[40] & 0x000000FF) | ((recv_buf[41] << 8) & 0x0000FF00) | ((recv_buf[42] << 16) & 0x00FF0000) | ((recv_buf[43] << 24) & 0xFF000000);
+        ntp_stat = NTP_OK;
         puts("OK.");
     }
 }
